@@ -1,0 +1,974 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Berry Bonk</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: Arial, sans-serif; }
+        canvas { display: block; }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 10px;
+            border-radius: 5px;
+        }
+        #healthBar {
+            width: 200px;
+            height: 20px;
+            background-color: #444;
+            border-radius: 10px;
+            margin-top: 5px;
+        }
+        #health {
+            width: 100%;
+            height: 100%;
+            background-color: #f33;
+            border-radius: 10px;
+            transition: width 0.3s;
+        }
+        #gameOver {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            display: none;
+        }
+        #gameOver button {
+            margin-top: 10px;
+            padding: 10px 20px;
+            background-color: #f33;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <div>Health:</div>
+        <div id="healthBar"><div id="health"></div></div>
+        <div>Red Berries: <span id="redBerries">0</span></div>
+        <div>Blue Berries: <span id="blueBerries">0</span></div>
+    </div>
+    <div id="gameOver">
+        <h2>Game Over</h2>
+        <p>Final Score: <span id="finalScore">0</span></p>
+        <button onclick="restartGame()">Play Again</button>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script>
+        // Game state
+        const gameState = {
+            redBerries: 0,
+            blueBerries: 0,
+            health: 100,
+            isGameOver: false,
+            enemies: [],
+            berries: [],
+            powerUps: [],
+            isPowerUpActive: false,
+            powerUpTimeRemaining: 0,
+            wave: 1,
+            waveEnemiesLeft: 0
+        };
+
+        // Input state
+        const keys = {};
+        let isAttacking = false;
+        
+        // Scene setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB); // Sky blue background
+        
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 10, 15);
+        camera.lookAt(0, 0, 0);
+        
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+        
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(10, 20, 10);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 2048;
+        directionalLight.shadow.mapSize.height = 2048;
+        scene.add(directionalLight);
+        
+        // Ground
+        const groundGeometry = new THREE.PlaneGeometry(50, 50);
+        const groundMaterial = new THREE.MeshStandardMaterial({ 
+            color: 0x4CAF50,
+            roughness: 0.8,
+            metalness: 0.2,
+            side: THREE.DoubleSide
+        });
+        const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+        ground.rotation.x = -Math.PI / 2;
+        ground.position.y = 0;
+        ground.receiveShadow = true;
+        scene.add(ground);
+        
+        // Player (Bearish)
+        const player = {
+            mesh: new THREE.Group(),
+            speed: 0.15,
+            size: 1,
+            position: new THREE.Vector3(0, 1, 0),
+            velocity: new THREE.Vector3(),
+            hammer: null,
+            hammerRotation: 0,
+            isSwinging: false,
+            swingSpeed: 0.2,
+            swingAngle: 0,
+            attackCooldown: 0,
+            attackRange: 3
+        };
+        
+        // Bear body
+        const bodyGeometry = new THREE.SphereGeometry(player.size, 16, 16);
+        const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+        const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+        body.castShadow = true;
+        player.mesh.add(body);
+        
+        // Bear head
+        const headGeometry = new THREE.SphereGeometry(player.size * 0.6, 16, 16);
+        const headMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+        const head = new THREE.Mesh(headGeometry, headMaterial);
+        head.position.set(0, player.size * 0.8, 0);
+        head.castShadow = true;
+        player.mesh.add(head);
+        
+        // Bear ears
+        const earGeometry = new THREE.SphereGeometry(player.size * 0.3, 8, 8);
+        const earMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+        const earLeft = new THREE.Mesh(earGeometry, earMaterial);
+        earLeft.position.set(-player.size * 0.4, player.size * 1.2, 0);
+        earLeft.castShadow = true;
+        player.mesh.add(earLeft);
+        
+        const earRight = new THREE.Mesh(earGeometry, earMaterial);
+        earRight.position.set(player.size * 0.4, player.size * 1.2, 0);
+        earRight.castShadow = true;
+        player.mesh.add(earRight);
+        
+        // Bear snout
+        const snoutGeometry = new THREE.SphereGeometry(player.size * 0.3, 8, 8);
+        const snoutMaterial = new THREE.MeshStandardMaterial({ color: 0x000000 });
+        const snout = new THREE.Mesh(snoutGeometry, snoutMaterial);
+        snout.position.set(0, player.size * 0.6, player.size * 0.5);
+        snout.scale.z = 0.5;
+        snout.castShadow = true;
+        player.mesh.add(snout);
+        
+        // Hammer
+        const hammerHandle = new THREE.CylinderGeometry(0.1, 0.1, 2, 8);
+        const hammerHandleMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+        player.hammer = new THREE.Mesh(hammerHandle, hammerHandleMaterial);
+        player.hammer.rotation.x = Math.PI / 2;
+        player.hammer.position.set(0, player.size * 0.5, player.size * 2);
+        player.hammer.castShadow = true;
+        
+        const hammerHead = new THREE.BoxGeometry(1, 0.6, 1.5);
+        const hammerHeadMaterial = new THREE.MeshStandardMaterial({ color: 0x555555 });
+        const hammerHeadMesh = new THREE.Mesh(hammerHead, hammerHeadMaterial);
+        hammerHeadMesh.position.set(0, 0, -1.2);
+        hammerHeadMesh.castShadow = true;
+        player.hammer.add(hammerHeadMesh);
+        
+        player.mesh.add(player.hammer);
+        player.mesh.position.copy(player.position);
+        scene.add(player.mesh);
+
+        // Enemy factory
+        function createEnemy(type, position) {
+            const enemy = {
+                type: type,
+                mesh: new THREE.Group(),
+                position: position || new THREE.Vector3(
+                    (Math.random() - 0.5) * 40,
+                    1,
+                    (Math.random() - 0.5) * 40
+                ),
+                velocity: new THREE.Vector3(),
+                health: 2,
+                speed: 0.05,
+                state: 'chasing',
+                targetPosition: new THREE.Vector3(),
+                nextActionTime: 0,
+                size: 0.8
+            };
+            
+            let bodyGeometry, bodyMaterial;
+            
+            switch(type) {
+                case 'snake':
+                    // Snake body
+                    bodyGeometry = new THREE.CylinderGeometry(0.3, 0.3, 2, 8);
+                    bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x00AA00 });
+                    enemy.speed = 0.03;
+                    enemy.changeDirectionTime = 1000;
+                    break;
+                    
+                case 'rabbit':
+                    // Rabbit body
+                    bodyGeometry = new THREE.SphereGeometry(0.5, 12, 12);
+                    bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xCCCCCC });
+                    enemy.speed = 0.08;
+                    enemy.jumpHeight = 3;
+                    enemy.isJumping = false;
+                    enemy.jumpVelocity = 0;
+                    enemy.jumpCooldown = 0;
+                    break;
+                    
+                case 'squirrel':
+                    // Squirrel body
+                    bodyGeometry = new THREE.SphereGeometry(0.4, 12, 12);
+                    bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xBB6600 });
+                    enemy.speed = 0.07;
+                    enemy.shootCooldown = 0;
+                    enemy.dashCooldown = 0;
+                    break;
+            }
+            
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            body.castShadow = true;
+            enemy.mesh.add(body);
+            
+            if (type === 'snake') {
+                body.rotation.z = Math.PI / 2;
+                
+                // Add snake head
+                const headGeometry = new THREE.SphereGeometry(0.4, 12, 12);
+                const headMaterial = new THREE.MeshStandardMaterial({ color: 0x009900 });
+                const head = new THREE.Mesh(headGeometry, headMaterial);
+                head.position.set(1, 0, 0);
+                head.castShadow = true;
+                enemy.mesh.add(head);
+            } else if (type === 'rabbit') {
+                // Add rabbit ears
+                const earGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.8, 8);
+                const earMaterial = new THREE.MeshStandardMaterial({ color: 0xDDDDDD });
+                
+                const earLeft = new THREE.Mesh(earGeometry, earMaterial);
+                earLeft.position.set(-0.2, 0.8, 0);
+                earLeft.castShadow = true;
+                enemy.mesh.add(earLeft);
+                
+                const earRight = new THREE.Mesh(earGeometry, earMaterial);
+                earRight.position.set(0.2, 0.8, 0);
+                earRight.castShadow = true;
+                enemy.mesh.add(earRight);
+            } else if (type === 'squirrel') {
+                // Add squirrel tail
+                const tailGeometry = new THREE.CylinderGeometry(0.1, 0.3, 1, 8);
+                const tailMaterial = new THREE.MeshStandardMaterial({ color: 0xCC7700 });
+                const tail = new THREE.Mesh(tailGeometry, tailMaterial);
+                tail.position.set(0, 0, -0.7);
+                tail.rotation.x = Math.PI / 2;
+                tail.castShadow = true;
+                enemy.mesh.add(tail);
+            }
+            
+            enemy.mesh.position.copy(enemy.position);
+            scene.add(enemy.mesh);
+            
+            return enemy;
+        }
+        
+        // Berry factory
+        function createBerry(type, position) {
+            const berry = {
+                type: type,
+                mesh: new THREE.Group(),
+                position: position,
+                collectedTime: 0,
+                isCollected: false
+            };
+            
+            const berryGeometry = new THREE.SphereGeometry(0.3, 8, 8);
+            const berryMaterial = new THREE.MeshStandardMaterial({ 
+                color: type === 'red' ? 0xFF0000 : 0x0000FF,
+                emissive: type === 'red' ? 0x330000 : 0x000033
+            });
+            const berryMesh = new THREE.Mesh(berryGeometry, berryMaterial);
+            berryMesh.castShadow = true;
+            berry.mesh.add(berryMesh);
+            
+            // Small stem
+            const stemGeometry = new THREE.CylinderGeometry(0.05, 0.05, 0.2, 4);
+            const stemMaterial = new THREE.MeshStandardMaterial({ color: 0x006600 });
+            const stem = new THREE.Mesh(stemGeometry, stemMaterial);
+            stem.position.y = 0.2;
+            stem.castShadow = true;
+            berry.mesh.add(stem);
+            
+            berry.mesh.position.copy(berry.position);
+            scene.add(berry.mesh);
+            
+            return berry;
+        }
+        
+        // Golden Fish power-up factory
+        function createGoldenFish(position) {
+            const powerUp = {
+                type: 'goldenFish',
+                mesh: new THREE.Group(),
+                position: position || new THREE.Vector3(
+                    (Math.random() - 0.5) * 30,
+                    1,
+                    (Math.random() - 0.5) * 30
+                ),
+                rotationSpeed: 0.02,
+                bobSpeed: 0.01,
+                bobHeight: 0.5,
+                isCollected: false,
+                spawnTime: Date.now()
+            };
+            
+            // Fish body
+            const fishGeometry = new THREE.CylinderGeometry(0.2, 0.5, 1.5, 8);
+            const fishMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0xFFD700,
+                metalness: 0.8,
+                roughness: 0.2,
+                emissive: 0x886600
+            });
+            const fishBody = new THREE.Mesh(fishGeometry, fishMaterial);
+            fishBody.rotation.z = Math.PI / 2;
+            fishBody.castShadow = true;
+            powerUp.mesh.add(fishBody);
+            
+            // Fish tail
+            const tailGeometry = new THREE.ConeGeometry(0.5, 0.8, 4);
+            const tailMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0xFFD700,
+                metalness: 0.8,
+                roughness: 0.2
+            });
+            const tail = new THREE.Mesh(tailGeometry, tailMaterial);
+            tail.position.set(-1, 0, 0);
+            tail.rotation.z = -Math.PI / 2;
+            tail.castShadow = true;
+            powerUp.mesh.add(tail);
+            
+            powerUp.mesh.position.copy(powerUp.position);
+            scene.add(powerUp.mesh);
+            
+            return powerUp;
+        }
+        
+        // Projectile factory (for squirrels)
+        function createProjectile(position, direction) {
+            const projectile = {
+                mesh: new THREE.Group(),
+                position: position.clone(),
+                velocity: direction.clone().normalize().multiplyScalar(0.25),
+                damage: 10,
+                createdTime: Date.now()
+            };
+            
+            const nutGeometry = new THREE.SphereGeometry(0.2, 8, 8);
+            const nutMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+            const nut = new THREE.Mesh(nutGeometry, nutMaterial);
+            nut.castShadow = true;
+            projectile.mesh.add(nut);
+            
+            projectile.mesh.position.copy(projectile.position);
+            scene.add(projectile.mesh);
+            
+            return projectile;
+        }
+        
+        // Initialize game objects
+        let projectiles = [];
+        spawnWave(1);
+        
+        function spawnWave(waveNumber) {
+            const baseEnemies = 3;
+            const enemiesPerWave = Math.floor(baseEnemies + waveNumber * 2);
+            
+            gameState.waveEnemiesLeft = enemiesPerWave;
+            
+            for (let i = 0; i < enemiesPerWave; i++) {
+                const spawnDistance = 20 + Math.random() * 10;
+                const angle = Math.random() * Math.PI * 2;
+                const position = new THREE.Vector3(
+                    Math.cos(angle) * spawnDistance,
+                    1,
+                    Math.sin(angle) * spawnDistance
+                );
+                
+                let enemyType;
+                const typeRoll = Math.random();
+                
+                if (typeRoll < 0.4) {
+                    enemyType = 'snake';
+                } else if (typeRoll < 0.7) {
+                    enemyType = 'rabbit';
+                } else {
+                    enemyType = 'squirrel';
+                }
+                
+                gameState.enemies.push(createEnemy(enemyType, position));
+            }
+            
+            // Spawn a golden fish every 2 waves
+            if (waveNumber % 2 === 0) {
+                gameState.powerUps.push(createGoldenFish());
+            }
+        }
+        
+        // Input handling
+        window.addEventListener('keydown', (e) => {
+            keys[e.key.toLowerCase()] = true;
+            
+            if (e.key === ' ' && !isAttacking && player.attackCooldown <= 0) {
+                isAttacking = true;
+                player.isSwinging = true;
+                player.swingAngle = 0;
+            }
+        });
+        
+        window.addEventListener('keyup', (e) => {
+            keys[e.key.toLowerCase()] = false;
+        });
+        
+        window.addEventListener('mousedown', () => {
+            if (!isAttacking && player.attackCooldown <= 0) {
+                isAttacking = true;
+                player.isSwinging = true;
+                player.swingAngle = 0;
+            }
+        });
+        
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        // Game loop
+        const clock = new THREE.Clock();
+        function animate() {
+            if (gameState.isGameOver) return;
+            
+            requestAnimationFrame(animate);
+            
+            const delta = clock.getDelta();
+            
+            updatePlayer(delta);
+            updateEnemies(delta);
+            updateBerries(delta);
+            updatePowerUps(delta);
+            updateProjectiles(delta);
+            updateUI();
+            
+            renderer.render(scene, camera);
+        }
+        
+        function updatePlayer(delta) {
+            // Reset velocity
+            player.velocity.set(0, 0, 0);
+            
+            // Movement direction
+            if (keys['w']) player.velocity.z -= player.speed;
+            if (keys['s']) player.velocity.z += player.speed;
+            if (keys['a']) player.velocity.x -= player.speed;
+            if (keys['d']) player.velocity.x += player.speed;
+            
+            // Normalize velocity for consistent diagonal movement
+            if (player.velocity.length() > 0) {
+                player.velocity.normalize().multiplyScalar(player.speed);
+            }
+            
+            // Update position
+            player.position.add(player.velocity);
+            player.position.y = 1;
+            
+            // Keep player within game bounds
+            const bounds = 22;
+            player.position.x = Math.max(-bounds, Math.min(bounds, player.position.x));
+            player.position.z = Math.max(-bounds, Math.min(bounds, player.position.z));
+            
+            // Rotate player in movement direction
+            if (player.velocity.length() > 0) {
+                const targetRotation = Math.atan2(player.velocity.x, player.velocity.z);
+                player.mesh.rotation.y = targetRotation;
+            }
+            
+            // Update player mesh position
+            player.mesh.position.copy(player.position);
+            
+            // Handle attack cooldown
+            if (player.attackCooldown > 0) {
+                player.attackCooldown -= delta;
+            }
+            
+            // Handle hammer swinging
+            if (player.isSwinging) {
+                player.swingAngle += player.swingSpeed;
+                player.hammer.rotation.y = -Math.PI / 2 + Math.sin(player.swingAngle) * Math.PI * 0.8;
+                
+                // Check for hits at halfway point of swing
+                if (player.swingAngle > Math.PI / 2 && player.swingAngle - player.swingSpeed <= Math.PI / 2) {
+                    checkHammerHits();
+                }
+                
+                // End swing
+                if (player.swingAngle >= Math.PI) {
+                    player.isSwinging = false;
+                    player.hammer.rotation.y = -Math.PI / 2;
+                    player.attackCooldown = 0.5;
+                    isAttacking = false;
+                }
+            }
+            
+            // Update camera position to follow player
+            camera.position.x = player.position.x;
+            camera.position.z = player.position.z + 15;
+            camera.lookAt(player.position.x, player.position.y, player.position.z);
+        }
+        
+        function checkHammerHits() {
+            for (let i = 0; i < gameState.enemies.length; i++) {
+                const enemy = gameState.enemies[i];
+                const distance = enemy.position.distanceTo(player.position);
+                
+                if (distance <= player.attackRange) {
+                    // Calculate if enemy is in front of player (in swing arc)
+                    const playerForward = new THREE.Vector3(0, 0, 1).applyQuaternion(player.mesh.quaternion);
+                    const toEnemy = new THREE.Vector3().subVectors(enemy.position, player.position).normalize();
+                    const dotProduct = playerForward.dot(toEnemy);
+                    
+                    // If enemy is in front of player (within ~120 degree arc)
+                    if (dotProduct > 0.1) {
+                        enemy.health--;
+                        
+                        // Add knockback
+                        const knockback = toEnemy.multiplyScalar(2);
+                        enemy.position.add(knockback);
+                        
+                        // Create visual feedback
+                        enemy.mesh.scale.set(1.5, 1.5, 1.5);
+                        setTimeout(() => {
+                            if (enemy.mesh.parent) {
+                                enemy.mesh.scale.set(1, 1, 1);
+                            }
+                        }, 100);
+                        
+                        // Check if enemy defeated
+                        if (enemy.health <= 0) {
+                            // Drop berries
+                            const berryType = Math.random() < 0.7 ? 'red' : 'blue';
+                            const berryPos = enemy.position.clone();
+                            berryPos.y = 0.5;
+                            gameState.berries.push(createBerry(berryType, berryPos));
+                            
+                            // Remove enemy
+                            scene.remove(enemy.mesh);
+                            gameState.enemies.splice(i, 1);
+                            i--;
+                            
+                            // Update wave counter
+                            gameState.waveEnemiesLeft--;
+                            
+                            // Check if wave completed
+                            if (gameState.waveEnemiesLeft <= 0) {
+                                gameState.wave++;
+                                setTimeout(() => {
+                                    spawnWave(gameState.wave);
+                                }, 3000);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        function updateEnemies(delta) {
+            for (let i = 0; i < gameState.enemies.length; i++) {
+                const enemy = gameState.enemies[i];
+                
+                switch (enemy.type) {
+                    case 'snake':
+                        updateSnake(enemy, delta);
+                        break;
+                    case 'rabbit':
+                        updateRabbit(enemy, delta);
+                        break;
+                    case 'squirrel':
+                        updateSquirrel(enemy, delta);
+                        break;
+                }
+                
+                // Check collision with player
+                const distance = enemy.position.distanceTo(player.position);
+                if (distance < player.size + enemy.size && !gameState.isPowerUpActive) {
+                    gameState.health -= 10;
+                    
+                    // Knockback player
+                    const knockbackDir = new THREE.Vector3().subVectors(player.position, enemy.position).normalize();
+                    player.position.add(knockbackDir.multiplyScalar(2));
+                    
+                    if (gameState.health <= 0) {
+                        gameOver();
+                    }
+                }
+                
+                // Update mesh position
+                enemy.mesh.position.copy(enemy.position);
+            }
+        }
+        
+        function updateSnake(snake, delta) {
+            // Snakes slither in curving paths toward the player
+            const toPlayer = new THREE.Vector3().subVectors(player.position, snake.position);
+            
+            // Occasionally change direction
+            if (Math.random() < 0.01) {
+                const angle = Math.random() * Math.PI * 0.5 - Math.PI * 0.25;
+                const currentDir = toPlayer.clone().normalize();
+                const newDir = new THREE.Vector3(
+                    currentDir.x * Math.cos(angle) - currentDir.z * Math.sin(angle),
+                    0,
+                    currentDir.x * Math.sin(angle) + currentDir.z * Math.cos(angle)
+                );
+                snake.velocity = newDir.normalize().multiplyScalar(snake.speed);
+            } else {
+                // Otherwise head generally toward player
+                snake.velocity = toPlayer.normalize().multiplyScalar(snake.speed);
+            }
+            
+            // Update position
+            snake.position.add(snake.velocity);
+            
+            // Rotate to face movement direction
+            if (snake.velocity.length() > 0) {
+                snake.mesh.rotation.y = Math.atan2(snake.velocity.x, snake.velocity.z);
+            }
+            
+            // Slithering animation
+            snake.mesh.position.y = 0.5 + Math.sin(Date.now() * 0.005) * 0.2;
+        }
+        
+        function updateRabbit(rabbit, delta) {
+            if (rabbit.isJumping) {
+                // Apply gravity
+                rabbit.jumpVelocity -= 0.01;
+                rabbit.position.y += rabbit.jumpVelocity;
+                
+                // Check if landed
+                if (rabbit.position.y <= 1) {
+                    rabbit.position.y = 1;
+                    rabbit.isJumping = false;
+                    rabbit.jumpCooldown = 1 + Math.random() * 2;
+                    
+                    // Check if player is nearby when landing
+                    const distance = rabbit.position.distanceTo(player.position);
+                    if (distance < 3 && !gameState.isPowerUpActive) {
+                        gameState.health -= 15;
+                        
+                        if (gameState.health <= 0) {
+                            gameOver();
+                        }
+                    }
+                }
+            } else {
+                // Countdown to next jump
+                rabbit.jumpCooldown -= delta;
+                
+                if (rabbit.jumpCooldown <= 0) {
+                    // Jump!
+                    rabbit.isJumping = true;
+                    rabbit.jumpVelocity = 0.2;
+                    
+                    // Jump in direction of player
+                    const toPlayer = new THREE.Vector3().subVectors(player.position, rabbit.position);
+                    toPlayer.y = 0;
+                    toPlayer.normalize().multiplyScalar(rabbit.speed * 10);
+                    
+                    // Add some randomness to jump direction
+                    toPlayer.x += (Math.random() - 0.5) * 2;
+                    toPlayer.z += (Math.random() - 0.5) * 2;
+                    
+                    rabbit.velocity = toPlayer;
+                    rabbit.position.add(rabbit.velocity);
+                    
+                    // Rotate to face jump direction
+                    rabbit.mesh.rotation.y = Math.atan2(rabbit.velocity.x, rabbit.velocity.z);
+                }
+            }
+        }
+        
+        function updateSquirrel(squirrel, delta) {
+            // Dash between points and shoot nuts
+            squirrel.dashCooldown -= delta;
+            squirrel.shootCooldown -= delta;
+            
+            if (squirrel.dashCooldown <= 0) {
+                // Set new dash target
+                const angle = Math.random() * Math.PI * 2;
+                const distance = 5 + Math.random() * 5;
+                squirrel.targetPosition = new THREE.Vector3(
+                    player.position.x + Math.cos(angle) * distance,
+                    1,
+                    player.position.z + Math.sin(angle) * distance
+                );
+                
+                squirrel.dashCooldown = 2 + Math.random() * 2;
+            }
+            
+            // Move toward target position
+            const toTarget = new THREE.Vector3().subVectors(squirrel.targetPosition, squirrel.position);
+            
+            if (toTarget.length() > 0.5) {
+                squirrel.velocity = toTarget.normalize().multiplyScalar(squirrel.speed);
+                squirrel.position.add(squirrel.velocity);
+                
+                // Rotate to face movement direction
+                squirrel.mesh.rotation.y = Math.atan2(squirrel.velocity.x, squirrel.velocity.z);
+            }
+            
+            // Shoot nuts at player
+            if (squirrel.shootCooldown <= 0 && squirrel.position.distanceTo(player.position) < 15) {
+                const toPlayer = new THREE.Vector3().subVectors(player.position, squirrel.position);
+                const projectilePos = squirrel.position.clone();
+                projectilePos.y = 1;
+                
+                projectiles.push(createProjectile(projectilePos, toPlayer));
+                squirrel.shootCooldown = 3 + Math.random() * 2;
+            }
+        }
+        
+        function updateBerries(delta) {
+            for (let i = 0; i < gameState.berries.length; i++) {
+                const berry = gameState.berries[i];
+                
+                // Animate berries
+                berry.mesh.rotation.y += 0.02;
+                berry.mesh.position.y = 0.5 + Math.sin(Date.now() * 0.003) * 0.1;
+                
+                // Check if player collected berry
+                const distance = berry.position.distanceTo(player.position);
+                if (distance < player.size + 1 && !berry.isCollected) {
+                    berry.isCollected = true;
+                    berry.collectedTime = Date.now();
+                    
+                    // Apply berry effect
+                    if (berry.type === 'red') {
+                        gameState.redBerries++;
+                    } else {
+                        gameState.blueBerries++;
+                    }
+                    
+                    // Animate collection
+                    berry.mesh.scale.set(2, 2, 2);
+                    berry.mesh.material = new THREE.MeshBasicMaterial({
+                        color: berry.type === 'red' ? 0xFF0000 : 0x0000FF,
+                        transparent: true,
+                        opacity: 0.8
+                    });
+                }
+                
+                // Remove collected berries after animation
+                if (berry.isCollected && Date.now() - berry.collectedTime > 300) {
+                    scene.remove(berry.mesh);
+                    gameState.berries.splice(i, 1);
+                    i--;
+                }
+            }
+        }
+        
+        function updatePowerUps(delta) {
+            // Update existing power-ups
+            for (let i = 0; i < gameState.powerUps.length; i++) {
+                const powerUp = gameState.powerUps[i];
+                
+                // Animate power-up
+                powerUp.mesh.rotation.y += powerUp.rotationSpeed;
+                powerUp.mesh.position.y = 1 + Math.sin(Date.now() * powerUp.bobSpeed) * powerUp.bobHeight;
+                
+                // Check if player collected power-up
+                const distance = powerUp.position.distanceTo(player.position);
+                if (distance < player.size + 1 && !powerUp.isCollected) {
+                    powerUp.isCollected = true;
+                    
+                    // Apply power-up effect
+                    if (powerUp.type === 'goldenFish') {
+                        gameState.isPowerUpActive = true;
+                        gameState.powerUpTimeRemaining = 60; // 60 seconds
+                        
+                        // Visual feedback for player
+                        player.mesh.children.forEach(child => {
+                            if (child.material) {
+                                child.material.emissive = new THREE.Color(0xFFAA00);
+                            }
+                        });
+                    }
+                    
+                    // Remove power-up
+                    scene.remove(powerUp.mesh);
+                    gameState.powerUps.splice(i, 1);
+                    i--;
+                }
+                
+                // Remove old power-ups
+                if (Date.now() - powerUp.spawnTime > 60000) { // 60 seconds
+                    scene.remove(powerUp.mesh);
+                    gameState.powerUps.splice(i, 1);
+                    i--;
+                }
+            }
+            
+            // Update power-up timer
+            if (gameState.isPowerUpActive) {
+                gameState.powerUpTimeRemaining -= delta;
+                
+                if (gameState.powerUpTimeRemaining <= 0) {
+                    gameState.isPowerUpActive = false;
+                    
+                    // Remove visual effect
+                    player.mesh.children.forEach(child => {
+                        if (child.material) {
+                            child.material.emissive = new THREE.Color(0x000000);
+                        }
+                    });
+                }
+            }
+        }
+        
+        function updateProjectiles(delta) {
+            for (let i = 0; i < projectiles.length; i++) {
+                const projectile = projectiles[i];
+                
+                // Update position
+                projectile.position.add(projectile.velocity);
+                projectile.mesh.position.copy(projectile.position);
+                
+                // Rotate projectile
+                projectile.mesh.rotation.x += 0.2;
+                projectile.mesh.rotation.z += 0.2;
+                
+                // Check collision with player
+                const distance = projectile.position.distanceTo(player.position);
+                if (distance < player.size + 0.5 && !gameState.isPowerUpActive) {
+                    gameState.health -= projectile.damage;
+                    
+                    // Remove projectile
+                    scene.remove(projectile.mesh);
+                    projectiles.splice(i, 1);
+                    i--;
+                    
+                    if (gameState.health <= 0) {
+                        gameOver();
+                    }
+                    
+                    continue;
+                }
+                
+                // Remove old projectiles
+                if (Date.now() - projectile.createdTime > 5000) { // 5 seconds
+                    scene.remove(projectile.mesh);
+                    projectiles.splice(i, 1);
+                    i--;
+                    continue;
+                }
+                
+                // Remove projectiles that go out of bounds
+                if (Math.abs(projectile.position.x) > 50 || Math.abs(projectile.position.z) > 50) {
+                    scene.remove(projectile.mesh);
+                    projectiles.splice(i, 1);
+                    i--;
+                }
+            }
+        }
+        
+        function updateUI() {
+            document.getElementById('health').style.width = `${gameState.health}%`;
+            document.getElementById('redBerries').textContent = gameState.redBerries;
+            document.getElementById('blueBerries').textContent = gameState.blueBerries;
+            
+            // Power-up indicator
+            if (gameState.isPowerUpActive) {
+                document.getElementById('healthBar').style.backgroundColor = '#FFD700'; // Gold
+                document.getElementById('health').style.backgroundColor = '#FFAA00'; // Orange-gold
+            } else {
+                document.getElementById('healthBar').style.backgroundColor = '#444';
+                document.getElementById('health').style.backgroundColor = '#f33';
+            }
+        }
+        
+        function gameOver() {
+            gameState.isGameOver = true;
+            
+            // Show game over screen
+            document.getElementById('gameOver').style.display = 'block';
+            document.getElementById('finalScore').textContent = gameState.redBerries;
+            
+            // Stop animation loop
+            cancelAnimationFrame(animate);
+        }
+        
+        function restartGame() {
+            // Reset game state
+            gameState.redBerries = 0;
+            gameState.blueBerries = 0;
+            gameState.health = 100;
+            gameState.isGameOver = false;
+            gameState.isPowerUpActive = false;
+            gameState.wave = 1;
+            
+            // Clear existing entities
+            gameState.enemies.forEach(enemy => scene.remove(enemy.mesh));
+            gameState.berries.forEach(berry => scene.remove(berry.mesh));
+            gameState.powerUps.forEach(powerUp => scene.remove(powerUp.mesh));
+            projectiles.forEach(projectile => scene.remove(projectile.mesh));
+            
+            gameState.enemies = [];
+            gameState.berries = [];
+            gameState.powerUps = [];
+            projectiles = [];
+            
+            // Reset player position
+            player.position.set(0, 1, 0);
+            player.mesh.position.copy(player.position);
+            player.mesh.rotation.y = 0;
+            player.hammer.rotation.y = -Math.PI / 2;
+            player.isSwinging = false;
+            
+            // Reset UI
+            document.getElementById('gameOver').style.display = 'none';
+            document.getElementById('health').style.width = '100%';
+            document.getElementById('redBerries').textContent = '0';
+            document.getElementById('blueBerries').textContent = '0';
+            
+            // Spawn first wave
+            spawnWave(1);
+            
+            // Restart animation
+            animate();
+        }
+        
+        // Start the game
+        animate();
+    </script>
+</body>
+</html>
